@@ -23,10 +23,10 @@ def normalize(input_image, input_mask):
   return input_image, input_mask
 
 def load_image(img, mask):
-  input_image = tf.image.resize(img, (256, 256))
+  input_image = tf.image.resize(img, (128, 128))
   input_mask = tf.image.resize(
     mask,
-    (256, 256),
+    (128, 128),
     method = tf.image.ResizeMethod.NEAREST_NEIGHBOR,
   )
   input_image, input_mask = normalize(input_image, input_mask)
@@ -86,7 +86,7 @@ for images, masks in train_batches.take(2):
   display([sample_image, sample_mask])
 
 # Train model
-base_model = tf.keras.applications.MobileNetV2(input_shape=[256, 256, 3], include_top=False)
+base_model = tf.keras.applications.MobileNetV2(input_shape=[128, 128, 3], include_top=False)
 
 
 layer_names = [
@@ -111,7 +111,7 @@ up_stack = [
 ]
 
 def unet_model(output_channels:int):
-  inputs = tf.keras.layers.Input(shape=[256, 256, 3])
+  inputs = tf.keras.layers.Input(shape=[128, 128, 3])
 
   # Downsampling through the model
   skips = down_stack(inputs)
