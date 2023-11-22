@@ -8,14 +8,19 @@ import matplotlib.pyplot as plt
 from IPython.display import clear_output
 
 
-BATCH_SIZE = 32
+BATCH_SIZE = 64
 BUFFER_SIZE = 1000
-STEPS_PER_EPOCH = 120
-RESERVED_FOR_TRAIN = 2000
+STEPS_PER_EPOCH = 10
+RESERVED_FOR_TRAIN = 1000
 
 
 image_folder_path  = './airbus-ship-detection/train_v2'
 mask_folder_path  = './airbus-ship-detection/masks_v2'
+
+img_ds = tf.keras.utils.image_dataset_from_directory(image_folder_path, labels=None, shuffle=None)
+
+segmentation_mask_ds = tf.keras.utils.image_dataset_from_directory(mask_folder_path, labels=None, shuffle=None, color_mode='grayscale')  # Assumes the filenames are in the same order
+ds = tf.data.Dataset.zip((img_ds, segmentation_mask_ds))
 
 def normalize(input_image, input_mask):
   input_image = tf.cast(input_image, tf.float32) / 255.0
@@ -23,14 +28,22 @@ def normalize(input_image, input_mask):
   return input_image, input_mask
 
 def load_image(img, mask):
+
   input_image = tf.image.resize(img, (128, 128))
+
   input_mask = tf.image.resize(
     mask,
     (128, 128),
     method = tf.image.ResizeMethod.NEAREST_NEIGHBOR,
   )
+
   input_image, input_mask = normalize(input_image, input_mask)
+
   return input_image, input_mask
+
+ds.batch(BATCH_SIZE)
+train_images = ds.map(load_image, num_parallel_calls=tf.data.AUTOTUNE)
+
 
 class Augment(tf.keras.layers.Layer):
     def __init__(self, seed=42):
@@ -44,6 +57,19 @@ class Augment(tf.keras.layers.Layer):
         labels = self.augment_labels(labels)
         return inputs, labels
 
+train_batches = (
+    train_images
+    .cache()
+    .shuffle(BUFFER_SIZE)
+    # .batch(BATCH_SIZE) setted previously, if set here shape of ds will be broken
+    .repeat()
+    .map(Augment())
+    .prefetch(buffer_size=tf.data.AUTOTUNE)
+    )
+
+test_batches = train_batches.take(RESERVED_FOR_TRAIN)
+train_batches = train_batches.skip(RESERVED_FOR_TRAIN)
+
 def display(display_list):
   plt.figure(figsize=(15, 15))
 
@@ -56,38 +82,11 @@ def display(display_list):
     plt.axis('off')
   plt.show()
 
-# Loading images and masks
-img_ds = tf.keras.utils.image_dataset_from_directory(image_folder_path, labels=None, shuffle=None)
-segmentation_mask_ds = tf.keras.utils.image_dataset_from_directory(mask_folder_path, labels=None, shuffle=None, color_mode='grayscale')  # Assumes the filenames are in the same order
-# Combine to one dataset, data will be in tuples (img, mask)
-ds = tf.data.Dataset.zip((img_ds, segmentation_mask_ds))
-
-ds.batch(BATCH_SIZE)
-train_images = ds.map(load_image, num_parallel_calls=tf.data.AUTOTUNE)
-
-train_batches = (
-    train_images
-    .cache()
-    # .shuffle(BUFFER_SIZE)
-    # .batch(BATCH_SIZE) batch was setted above, if we call it here it will breake shape of dataset
-    .repeat()
-    .map(Augment())
-    .prefetch(buffer_size=tf.data.AUTOTUNE)
-    )
-
-# Split dataset because original data for test was corrupted
-test_batches = train_batches.take(RESERVED_FOR_TRAIN).cache()
-train_batches = train_batches.skip(RESERVED_FOR_TRAIN)
-
-
-
 for images, masks in train_batches.take(2):
   sample_image, sample_mask = images[0], masks[0]
   display([sample_image, sample_mask])
 
-# Train model
 base_model = tf.keras.applications.MobileNetV2(input_shape=[128, 128, 3], include_top=False)
-
 
 layer_names = [
     'block_1_expand_relu',   # 64x64
@@ -136,7 +135,7 @@ def unet_model(output_channels:int):
 OUTPUT_CLASSES = 3
 
 model = unet_model(output_channels=OUTPUT_CLASSES)
-model.compile(optimizer= 'adam', #tf.keras.optimizers.Adam(learning_rate=0.01),
+model.compile(optimizer='adam', #tf.keras.optimizers.Adam(learning_rate=0.01),
               loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
               metrics=['accuracy'])
 
@@ -164,6 +163,7 @@ class DisplayCallback(tf.keras.callbacks.Callback):
     print ('\nSample Prediction after epoch {}\n'.format(epoch+1))
 
 EPOCHS = 20
+VAL_SUBSPLITS = 5
 
 model_history = model.fit(train_batches, epochs=EPOCHS,
                           steps_per_epoch=STEPS_PER_EPOCH,
